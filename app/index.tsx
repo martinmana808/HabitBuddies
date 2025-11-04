@@ -265,8 +265,9 @@ export default function Index() {
                 </Text>
               </TouchableOpacity>
 
-              {(habit.person === 'martin' || habit.person === 'both') && (
-                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+              {/* Martin Checkbox - Always rendered for alignment */}
+              <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                {(habit.person === 'martin' || habit.person === 'both') ? (
                   <TouchableOpacity
                     onPress={() => toggleHabit(habit.id, 'martin')}
                     style={{
@@ -284,11 +285,15 @@ export default function Index() {
                       <Text style={{ color: 'white', fontSize: 18, fontWeight: 'bold' }}>✓</Text>
                     )}
                   </TouchableOpacity>
-                </View>
-              )}
+                ) : (
+                  // Invisible placeholder to maintain alignment
+                  <View style={{ width: 32, height: 32 }} />
+                )}
+              </View>
 
-              {(habit.person === 'elise' || habit.person === 'both') && (
-                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+              {/* Elise Checkbox - Always rendered for alignment */}
+              <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                {(habit.person === 'elise' || habit.person === 'both') ? (
                   <TouchableOpacity
                     onPress={() => toggleHabit(habit.id, 'elise')}
                     style={{
@@ -306,8 +311,11 @@ export default function Index() {
                       <Text style={{ color: 'white', fontSize: 18, fontWeight: 'bold' }}>✓</Text>
                     )}
                   </TouchableOpacity>
-                </View>
-              )}
+                ) : (
+                  // Invisible placeholder to maintain alignment
+                  <View style={{ width: 32, height: 32 }} />
+                )}
+              </View>
             </View>
           );
         })}
