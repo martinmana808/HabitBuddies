@@ -1,11 +1,14 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { supabase } from '../constants/supabase';
 import { Habit, DailyHabits } from '../types/habits';
 import { defaultHabits } from '../constants/defaultHabits';
+import NetInfo from '@react-native-community/netinfo';
 
 interface HabitsContextType {
   habits: Habit[];
   isLoading: boolean;
+  isOnline: boolean;
   toggleHabit: (habitId: string, person: 'martin' | 'elise') => void;
   addHabit: (name: string, person: 'martin' | 'elise' | 'both') => void;
   updateHabit: (id: string, name: string, person: 'martin' | 'elise' | 'both') => void;
@@ -27,6 +30,15 @@ export const useHabits = () => {
 export const HabitsProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [habits, setHabits] = useState<Habit[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isOnline, setIsOnline] = useState(false);
+
+  // Check online status
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      setIsOnline(state.isConnected ?? false);
+    });
+    return () => unsubscribe();
+  }, []);
 
   const STORAGE_KEY = 'dailyHabits';
 
@@ -35,30 +47,84 @@ export const HabitsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
   };
 
+  const syncHabitsToSupabase = useCallback(async (habitsToSync: Habit[]) => {
+    try {
+      const todayKey = getTodayKey();
+      const { error } = await supabase
+        .from('daily_habits')
+        .upsert({
+          date: todayKey,
+          habits: habitsToSync,
+          user_id: 'shared' // For now, using a shared user for both
+        });
+      if (error) {
+        console.error('Error syncing to Supabase:', error);
+      }
+    } catch (error) {
+      console.error('Error syncing habits to Supabase:', error);
+    }
+  }, []);
+
+  const loadHabitsFromSupabase = useCallback(async () => {
+    try {
+      const todayKey = getTodayKey();
+      const { data, error } = await supabase
+        .from('daily_habits')
+        .select('habits')
+        .eq('date', todayKey)
+        .eq('user_id', 'shared')
+        .single();
+
+      if (error && error.code !== 'PGRST116') { // PGRST116 is "not found"
+        console.error('Error loading from Supabase:', error);
+        return null;
+      }
+
+      return data?.habits || null;
+    } catch (error) {
+      console.error('Error loading habits from Supabase:', error);
+      return null;
+    }
+  }, []);
+
   const loadHabits = useCallback(async () => {
     try {
       const todayKey = getTodayKey();
+      let habitsToLoad = defaultHabits;
+
+      // Try to load from Supabase first if online
+      if (isOnline) {
+        const supabaseHabits = await loadHabitsFromSupabase();
+        if (supabaseHabits) {
+          habitsToLoad = supabaseHabits;
+        }
+      }
+
+      // Fallback to AsyncStorage
       const stored = await AsyncStorage.getItem(STORAGE_KEY);
       if (stored) {
         const data: DailyHabits = JSON.parse(stored);
         if (data.date === todayKey) {
-          setHabits(data.habits);
-        } else {
-          // New day, reset with default habits
-          setHabits(defaultHabits);
-          await saveHabits(defaultHabits);
+          habitsToLoad = data.habits;
         }
-      } else {
-        setHabits(defaultHabits);
-        await saveHabits(defaultHabits);
       }
+
+      // If it's a new day, reset with default habits
+      const storedDate = stored ? JSON.parse(stored).date : null;
+      if (storedDate !== todayKey) {
+        habitsToLoad = defaultHabits;
+      }
+
+      setHabits(habitsToLoad);
+      await saveHabits(habitsToLoad);
+      setIsOnline(false); // Mark as offline since Supabase failed
     } catch (error) {
       console.error('Error loading habits:', error);
       setHabits(defaultHabits);
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [isOnline, loadHabitsFromSupabase]);
 
   const saveHabits = useCallback(async (habitsToSave: Habit[]) => {
     try {
@@ -67,10 +133,15 @@ export const HabitsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         habits: habitsToSave,
       };
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+
+      // Also sync to Supabase if online
+      if (isOnline) {
+        await syncHabitsToSupabase(habitsToSave);
+      }
     } catch (error) {
       console.error('Error saving habits:', error);
     }
-  }, []);
+  }, [isOnline, syncHabitsToSupabase]);
 
   const toggleHabit = useCallback((habitId: string, person: 'martin' | 'elise') => {
     setHabits(prev => {
@@ -86,9 +157,11 @@ export const HabitsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           : habit
       );
       saveHabits(updated);
+        syncHabitsToSupabase(updated);
+      }
       return updated;
     });
-  }, [saveHabits]);
+  }, [saveHabits, isOnline]);
 
   const addHabit = useCallback((name: string, person: 'martin' | 'elise' | 'both') => {
     const newHabit: Habit = {
@@ -135,7 +208,11 @@ export const HabitsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const resetDailyHabits = useCallback(() => {
     setHabits(defaultHabits);
     saveHabits(defaultHabits);
-  }, [saveHabits]);
+    // Sync to Supabase if online
+    if (isOnline) {
+      syncHabitsToSupabase(defaultHabits);
+    }
+  }, [saveHabits, isOnline]);
 
   useEffect(() => {
     loadHabits();
@@ -144,6 +221,7 @@ export const HabitsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const value: HabitsContextType = {
     habits,
     isLoading,
+    isOnline,
     toggleHabit,
     addHabit,
     updateHabit,
